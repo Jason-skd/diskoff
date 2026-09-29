@@ -40,6 +40,8 @@ pub fn build(b: *std.Build) void {
         // which requires us to specify a target.
         .target = target,
     });
+    mod.linkFramework("CoreFoundation", .{});
+    mod.linkFramework("DiskArbitration", .{});
 
     // Here we define an executable. An executable needs to have a root module
     // which needs to expose a `main` function. While we could add a main function
