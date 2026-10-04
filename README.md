@@ -1,19 +1,45 @@
 # diskoff
 
-diskoff 正在开发 macOS 外接硬盘的只读识别、占用诊断和弹出能力。当前库已提供从挂载卷路径解析单块外接物理硬盘及关联卷的入口；CLI 尚未接入该入口。
+macOS 外接物理硬盘的只读识别库与 CLI。占用诊断和整盘弹出属于后续交付。
+
+## 常用指令
+
+需要 macOS，以及 [build.zig.zon](build.zig.zon) 声明的 Zig 工具链。
+
+```sh
+zig build
+zig build run -- --help
+zig build run -- "/Volumes/My Drive"
+zig build test
+zig fmt --check build.zig build.zig.zon src
+```
+
+`zig build` 安装 CLI 到 `zig-out/bin/diskoff`。构建和测试支持 `-Doptimize=safe`；首次构建通过 Zig 包管理器获取锁定的 zig-clap 依赖。系统集成测试需要访问 macOS Disk Arbitration 服务。
+
+库的最小调用：
 
 ```zig
 var disk = try diskoff.resolveDiskScope(allocator, io, "/Volumes/My Drive");
 defer disk.deinit(allocator);
-
-// disk.disk_bsd_name 是物理硬盘的 BSD 名称，例如 "disk4"。
-// disk.volumes 含关联卷的 BSD 名称；mount_path 为 null 表示未挂载。
 ```
 
-调用方只应对 `mount_path != null` 的卷做路径占用查询。入口只接受已挂载卷的准确挂载点，支持路径中的空格和特殊字符。当前只支持能唯一归属一块外接物理硬盘的拓扑；内置盘、磁盘映像、无法识别的存储关系及多物理盘 APFS 组合会返回错误。`DiskScope` 拥有返回的字符串和卷列表，调用方须使用同一 allocator 调用 `deinit`。
+## 项目架构
 
-实现全部为 Zig，通过 `extern` 调用 Disk Arbitration 和 CoreFoundation，并启动 `diskutil list -plist` 获取只读拓扑。查询不设固定超时；Zig I/O 取消会清理正在运行的 `diskutil` 子进程。同步的 Disk Arbitration 调用本身没有可用的即时取消点，取消会在调用返回后被观察到。
+- [src/main.zig](src/main.zig)：zig-clap 参数解析、只读查询编排、输出和退出状态。
+- [src/root.zig](src/root.zig)：库公共入口及调用契约。
+- [src/disk_scope.zig](src/disk_scope.zig)：磁盘与卷模型、拓扑范围解析规则。
+- [src/macos_disk.zig](src/macos_disk.zig)：Disk Arbitration 查询、diskutil 子进程和 plist 转换；系统句柄限定在此文件内。
+- [build.zig](build.zig)：库模块、CLI、构建与测试入口。
 
-本机验证使用 Zig 0.17.0-dev.2326+f94185e67、macOS SDK 27.0，已测试 Disk Arbitration 路径解析和模拟 plist 的普通分区、APFS 映射及未挂载卷。验证时 `diskutil list -plist physical external` 为空，没有外接硬盘，因此尚未完成 Issue #1 要求的外接设备实机核对。
+## 文档索引
 
-项目阶段和后续交付见 [ROADMAP.md](ROADMAP.md)。
+- [路线图与支持范围](ROADMAP.md)
+- [变更记录](CHANGELOG.md)
+- [仓库 AI 治理](AGENTS.md)
+
+## 权威来源
+
+- 库 API 与资源所有权：[src/root.zig](src/root.zig)、[src/disk_scope.zig](src/disk_scope.zig) 的声明、注释与行为测试。
+- CLI 参数：[src/main.zig](src/main.zig) 的 zig-clap 参数声明。
+- 工具链要求与锁定依赖：[build.zig.zon](build.zig.zon)。
+- 平台接口：macOS SDK 的 DiskArbitration、CoreFoundation 头文件，以及系统 `diskutil` 的 plist 输出；转换与验证见 [src/macos_disk.zig](src/macos_disk.zig)。
