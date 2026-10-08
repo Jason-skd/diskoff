@@ -67,3 +67,4 @@ docgen_tmp/
 # zig
 
 .zig-cache/
+zig-pkg/
