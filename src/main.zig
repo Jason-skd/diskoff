@@ -73,7 +73,7 @@ fn run(allocator: std.mem.Allocator, io: Io, args: []const []const u8, stdout: *
 fn resolveErrorMessage(err: (diskoff.ResolveError || std.mem.Allocator.Error)) []const u8 {
     return switch (err) {
         error.InvalidVolumePath => "specify the exact mount point of a mounted volume.",
-        error.UnsupportedTarget => "the volume is not on a supported external physical disk.",
+        error.UnsupportedTarget => "the volume or an associated volume is not on a supported external physical disk.",
         error.AmbiguousPhysicalDisk => "the volume or an associated volume spans multiple physical disks.",
         error.SystemQueryFailed => "unable to query macOS disk information.",
         error.InvalidSystemResponse => "macOS returned invalid or inconsistent disk information.",

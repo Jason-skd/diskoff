@@ -181,13 +181,13 @@ fn parseTopology(arena: Allocator, physical: cf.Ref, external: cf.Ref, all: cf.R
         try addOwner(arena, &owners, name, name);
         const disk_names = try arena.alloc([]const u8, 1);
         disk_names[0] = name;
-        try appendVolume(arena, &volumes, entry, disk_names, false);
+        try appendVolume(arena, &volumes, entry, .{ .resolved = disk_names }, false);
         if (try field(entry, "Partitions")) |parts_value| {
             const parts = try Array.init(parts_value);
             for (0..parts.len) |j| {
                 const part = try parts.at(j);
                 try addOwner(arena, &owners, try textField(arena, part, "DeviceIdentifier"), name);
-                try appendVolume(arena, &volumes, part, disk_names, false);
+                try appendVolume(arena, &volumes, part, .{ .resolved = disk_names }, false);
             }
         }
     }
@@ -211,8 +211,12 @@ fn parseTopology(arena: Allocator, physical: cf.Ref, external: cf.Ref, all: cf.R
             } else supported = false;
         }
         const apfs = try Array.init(apfs_value);
+        const physical_disks: scope.TopologyVolume.PhysicalDisks = if (supported)
+            .{ .resolved = backing.items }
+        else
+            .{ .unresolved = backing.items };
         for (0..apfs.len) |j| {
-            try appendVolume(arena, &volumes, try apfs.at(j), if (supported) backing.items else &.{}, true);
+            try appendVolume(arena, &volumes, try apfs.at(j), physical_disks, true);
         }
     }
     return .{ .physical_disks = disks.items, .volumes = volumes.items };
@@ -228,7 +232,7 @@ fn findOwner(owners: []const Owner, device: []const u8) ?[]const u8 {
     return null;
 }
 
-fn appendVolume(arena: Allocator, volumes: *std.ArrayList(scope.TopologyVolume), entry: cf.Ref, disks: []const []const u8, apfs: bool) Error!void {
+fn appendVolume(arena: Allocator, volumes: *std.ArrayList(scope.TopologyVolume), entry: cf.Ref, disks: scope.TopologyVolume.PhysicalDisks, apfs: bool) Error!void {
     const mount = if (try field(entry, "MountPoint")) |value| try string(arena, value) else null;
     // Partition-map entries and APFS physical stores are not filesystem volumes.
     if (!apfs and mount == null and try field(entry, "VolumeName") == null) return;
@@ -287,4 +291,41 @@ test "input path maps through Disk Arbitration on macOS" {
     defer std.testing.allocator.free(name);
     try std.testing.expect(std.mem.startsWith(u8, name, "disk"));
     try std.testing.expectError(error.InvalidVolumePath, inputVolume(std.testing.allocator, "/tmp"));
+}
+
+test "plist topology rejects a related APFS volume with an unmapped store" {
+    const physical = try parsePlist(
+        \\<plist version="1.0"><dict><key>AllDisksAndPartitions</key><array>
+        \\<dict><key>DeviceIdentifier</key><string>disk4</string><key>Partitions</key><array>
+        \\<dict><key>DeviceIdentifier</key><string>disk4s1</string><key>VolumeName</key><string>Input</string><key>MountPoint</key><string>/Volumes/Input</string></dict>
+        \\<dict><key>DeviceIdentifier</key><string>disk4s2</string></dict></array></dict>
+        \\<dict><key>DeviceIdentifier</key><string>disk5</string><key>VolumeName</key><string>Other</string><key>MountPoint</key><string>/Volumes/Other</string></dict>
+        \\</array></dict></plist>
+    );
+    defer cf.CFRelease(physical);
+    const external = try parsePlist(
+        \\<plist version="1.0"><dict><key>WholeDisks</key><array>
+        \\<string>disk4</string><string>disk5</string></array></dict></plist>
+    );
+    defer cf.CFRelease(external);
+    const all = try parsePlist(
+        \\<plist version="1.0"><dict><key>AllDisksAndPartitions</key><array>
+        \\<dict><key>DeviceIdentifier</key><string>disk6</string>
+        \\<key>APFSPhysicalStores</key><array>
+        \\<dict><key>DeviceIdentifier</key><string>disk4s2</string></dict>
+        \\<dict><key>DeviceIdentifier</key><string>disk9s1</string></dict></array>
+        \\<key>APFSVolumes</key><array>
+        \\<dict><key>DeviceIdentifier</key><string>disk6s1</string></dict>
+        \\</array></dict></array></dict></plist>
+    );
+    defer cf.CFRelease(all);
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const topology = try parseTopology(arena.allocator(), physical, external, all);
+    try std.testing.expectError(error.UnsupportedTarget, scope.resolveTopology(std.testing.allocator, topology, "disk4s1"));
+    try std.testing.expectError(error.UnsupportedTarget, scope.resolveTopology(std.testing.allocator, topology, "disk6s1"));
+    var unrelated = try scope.resolveTopology(std.testing.allocator, topology, "disk5");
+    defer unrelated.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("disk5", unrelated.disk_bsd_name);
+    try std.testing.expectEqual(@as(usize, 1), unrelated.volumes.len);
 }
